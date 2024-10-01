@@ -1,0 +1,135 @@
+---
+title: "Barbell lift"
+author: "Jiaqi Li"
+date: "2024-09-24"
+output: html_document
+# Coursera
+# Practical Machine Learning
+# Modules 4 project
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE,}
+library(tidyverse); library(caret);library(gbm);library(e1071);library(randomForest)
+```
+
+## Introduction
+  This project leverages data from accelerometers worn by six people on different parts of their bodies while performing barbell lifts. Each person performed the barbell lift both correctly and incorrectly in five ways. The goal is to build a machine learning model to predict what is the type of the barbell lift.
+  First step is to exploring the data, understanding the feature, and clean up. The two data sets contain 160 columns and the classifier column is "classe", which indicate 5 types of the movement patterns(A,B,C,D,E). 
+
+
+```{r Explore}
+# Load the data
+pml_testing <- read.csv("./pml-testing.csv")
+pml_training <- read.csv("./pml-training.csv")
+# Explore the data
+barplot(table(pml_training$user_name),xlab = "Person", ylab = "Frequency",col = rainbow(6), border = "black")
+barplot(table(pml_training$classe),xlab = "Classe", ylab = "Frequency",
+        col = rainbow(6), border = "black")
+# Convert the 'classe' to factor
+pml_training$classe <- as.factor(pml_training$classe)
+```
+
+## Data pre-processing
+  Some columns in the dataset contain missing value. These columns will be removed before splitting the data.The training data contains 14718 rows, which will be divided into training and validation sets for model training and evaluation.
+
+```{r Peprocess, echo=TRUE}
+# find out which column contain na, "", NULL
+keep_col <- pml_training %>% 
+              mutate(across(everything(), ~ ifelse(is.null(.) | . == "", NA, .))) %>%
+              summarise(across(everything(), ~mean(is.na(.)))) %>%
+              select(where(~ . < 0.10)) %>%
+              names()
+pml_training_filted <- pml_training[,keep_col]
+pml_training_filted <- pml_training_filted[,-c(1,3:5)]
+
+# Quick look some of the data
+featurePlot(x = pml_training_filted[,3:5], y = pml_training_filted$classe,
+            plot = "pairs", auto.key = list(pml_training_filted$classe))
+
+# split the training data ####
+set.seed(20241)
+inTrain = createDataPartition(pml_training_filted$classe, p = 3/4)[[1]]
+training = pml_training_filted[ inTrain,]
+validating = pml_training_filted[-inTrain,]
+```
+
+## Model training
+  The data will be tained using 4 machine learning algorithms: Random Forest, Gradient Boosting (gbm), Linear Discriminant Analysis (lda), and Support Vector Machines (svm). A ten-fold cross-validation will be applied to ensure that the model generalizes well to unseen data.
+  The Random Forest perform very slow compare to other three algorithms.
+  
+```{r model training 1, echo=TRUE,cache=TRUE, message=FALSE, warning=FALSE, results='hide'}
+set.seed(20242)
+fitControl <- trainControl(method = "repeatedcv",number = 10,repeats = 3, verboseIter = FALSE)
+# 
+suppressMessages({
+  suppressWarnings({
+    capture.output({
+      pml_rf <- train(classe ~ ., method = "rf", data = training, trControl = fitControl, verbose = FALSE)
+    })
+  })
+})
+
+```
+
+```{r model training2, echo=TRUE,cache=TRUE}
+# Train gbm, lda, and svm model
+pml_gbm <- train(classe ~ ., method = "gbm", data = training,
+                 trControl = fitControl,verbose = FALSE)
+pml_lda <- train(classe ~ ., method = "lda", data = training,
+                 trControl = fitControl,verbose = FALSE)
+pml_svm <- svm(classe ~ ., data = training,
+               trControl = fitControl,verbose = FALSE)
+```
+## Model evaluation
+  The models were evaluated on the validation dataset using accuracy and other metrics such as precision and recall. Feature importance was also analyzed to identify the variables that had the greast influence on the predictions.
+  The evaluation results shewed that the Random Forest model achieved and accuracy of 1.00, gbm achieved 0.99, lda scored 0.75, and svm is 0.96. Among these, the Random Forest model performed the best.
+  For the top two models, Random Forest and gbm, the most important variables were identified. In both models, the same top 4 variables come up: num_window,roll_belt,pitch_forearm, and yaw_belt. 
+  
+```{r Model evaluation, echo=TRUE}
+# Validation
+rf_val <-  predict(pml_rf, newdata = validating)
+gbm_val <- predict(pml_gbm, newdata = validating)
+lda_val <- predict(pml_lda, newdata = validating)
+svm_val <- predict(pml_svm, newdata = validating)
+# Accuracy
+rf_conf <- confusionMatrix(rf_val, validating$classe)
+gbm_conf <- confusionMatrix(gbm_val, validating$classe)
+lda_conf <- confusionMatrix(lda_val, validating$classe)
+svm_conf <- confusionMatrix(svm_val, validating$classe)
+
+print(paste("Accuracy of Random Forest Model: ",rf_conf$overall['Accuracy']))
+print(paste("Accuracy of GBM Model:",gbm_conf$overall['Accuracy']))
+print(paste("Accuracy of LDA Model:",lda_conf$overall['Accuracy']))
+print(paste("Accuracy of SVM Model:",svm_conf$overall['Accuracy']))
+
+#
+rf_importance <- varImp(pml_rf, scale = FALSE)
+print(rf_importance)
+gbm_importance <- varImp(pml_gbm, scale = FALSE)
+print(rf_importance)
+print(gbm_importance)
+```
+## Prediction on Test Data:
+  We used all four models to predict the barbell lift patterns on the testing data. The results show that the top three models provided consistent predictions, while the LDA model produced different results. Given the lower accuracy of the LDA model, its results were discarded.
+```{r Prediction, echo=TRUE}
+# trimming the testing data with same column
+pml_testing_filted <- pml_testing[,colnames(training)[-56]]
+# prediction
+rf_pred <-  predict(pml_rf,  newdata = pml_testing_filted)
+gbm_pred <- predict(pml_gbm, newdata = pml_testing_filted)
+lda_pred <- predict(pml_lda, newdata = pml_testing_filted)
+svm_pred <- predict(pml_svm, newdata = pml_testing_filted)
+
+Results <- data.frame(rf = rf_pred, gbm = gbm_pred,
+                      lda = lda_pred, svm = svm_pred)
+print(Results)
+```
+## Summary
+  In this project, a comprehensive machine learning approach was used to build a model that predicts barbell lift patterns. The data preprocessing step removed the columns with missing values and split data into training and validation sets. Four machine learning algorithms were employed: Random Forest, Gradient Boosting, Linear Discriminant Analysis, and Support Vector Machines. To ensure the models generalized to new data, ten-fold cross-validation was applied, helping to estimate the expected out-of-sample error and prevent overfitting.
+  The model evaluation showed that Random forest had the highest accuracy (0.997), followed closely by GBM(0.986) and SVM (0.96), while LDA laaged behind with 0.75 accuracy. The choices made were guided by the goal of maximizing accuracy and reducing the error. Finally, the prediction model was used to make predictions on 20 test cases. Since the Random Forest has perfect accuracy, it was selected as the primary model. If the speed of training the model is critical, GBM is a good alternation.
+
+
+
+
+
+
